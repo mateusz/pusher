@@ -26,6 +26,10 @@ class Pusher {
 		throw new UserException("Not implemented yet");
 	}
 
+	/**
+	 * Perform full deployment.
+	 * This will delete and recreate the remote branch on the version. All cherry-picking and custom changes on the target branch will be erased.
+	 */
 	function deploy($args) {
 		if(empty($args[0]) || empty($args[1])) throw new UserException("Usage: pusher deploy <environment> <version>");
 		$environment = $args[0];
@@ -47,19 +51,20 @@ class Pusher {
 		// Ensure that the code is available on the server in question
 		$this->execer->execOrException("git push --tags $environment");
 		
-		// Deploy the code
+		// Deploy the code by blindly switching to a version (no branch needed)
 		$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && git checkout $version\"");
-		
+
 		// Run post-deploy script
 		if(!empty($this->config['handlers']['post-deploy'])) {
 			$postReceive = $this->config['handlers']['post-deploy'];
 			$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && $postReceive\"");
 		}
 		
-		// Update the tracking branch
-		$this->execer->execOrException("git checkout $version");
-		$this->execer->execOrException("git branch -D $environment");
-		$this->execer->execOrException("git checkout -b $environment");
+		// Recreate the target branch and update at origin.
+		if ($this->git->branchExists($environment)) {
+			$this->execer->execOrException("git branch -D $environment");
+		}
+		$this->execer->execOrException("git branch $environment $version");
 		$this->execer->execOrException("git push origin +$environment:$environment");
 	}
 	function rollback($args) {
@@ -144,7 +149,9 @@ init-environment - Set up a new environment to ensure that you can deploy to it.
 		$this->execer = new Execer;
 		
 		if(empty($this->config['environments'])) throw new UserException("Your configuration file has no environments");
-		if(empty($this->config['handlers'])) throw new UserException("Your configuration file has no handlers");
+
+		// Don't think we need to force this
+		// if(empty($this->config['handlers'])) throw new UserException("Your configuration file has no handlers");
 	}
 
 
@@ -176,6 +183,24 @@ class Git {
 	}
 	
 	/**
+	 * Return true if the given tag exists
+	 */
+	function branchExists($branch) {
+		return in_array($branch, $this->branches());
+	}
+	
+	/**
+	 * Return all tags
+	 */
+	function branches() {
+		$branches = trim($this->exec("git branch"));
+		$branches = str_replace('* ', '', $branches);
+		$branches = str_replace(' ', '', $branches);
+		if($branches) return explode("\n", $branches);
+		else return array();
+	}
+
+	/**
 	 * Return all the tags/branches (names) for the given ref
 	 */
 	function namesFor($ref) {
@@ -194,7 +219,7 @@ class Git {
 			return $this->execer->execOrException("ssh $this->ssh $CLI_cmd", false);
 		} else {
 			chdir($this->dir);
-			return $this->execer->execOrException("git tag", false);
+			return $this->execer->execOrException($cmd, false);
 		}
 	}
 }
