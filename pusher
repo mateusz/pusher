@@ -14,8 +14,8 @@ class Pusher {
 
 		$localDate = trim(`date "+%Y-%m-%d %H:%M:%S"`, "\n");
 
-		if (isset($this->config['logging']['local_filename'])) {
-			$filename = $this->config['logging']['local_filename'];
+		if (isset($this->config['files']['local_log'])) {
+			$filename = $this->config['files']['local_log'];
 		}
 		else {
 			$filename = '.pusherlog';
@@ -35,8 +35,8 @@ class Pusher {
 		$dest = $this->config['environments'][$environment];
 		list($environmentSSH, $environmentDir) = explode(':', $dest, 2);
 
-		if (isset($this->config['logging']['remote_filename'])) {
-			$filename = $this->config['logging']['remote_filename'];
+		if (isset($this->config['files']['remote_log'])) {
+			$filename = $this->config['files']['remote_log'];
 		}
 		else {
 			$filename = '.pusherlog';
@@ -54,19 +54,99 @@ class Pusher {
 		return $this->release($args);
 	}
 	function release($args) {
+		$forceTag = isset($args[0]) ? $args[0] : null;
+
 		// Fetch everything to ensure that we don't clobber other people's work
+		$this->execer->execOrException("git fetch");
+		$this->execer->execOrException("git fetch --tags");
 		
 		// Pick a tag
+		list($tag, $ahead, $latest) = $this->git->latestTagOnBranch();
+		if ($ahead=='0') throw new UserException("No changes since last revision.");
+
+		if (is_numeric($ahead)) {
+			echo "Preparing release with $ahead changes.\n";
+		}
+
+		// Update main revision
+		if ($forceTag=='major') {
+			$tagParts = explode('.', $tag);
+			$firstPart = array_shift($tagParts);
+			$firstPart = ((int)substr($firstPart, 1))+1;
+			$pickedTag = "v$firstPart.0.0";
+		}
+		// Update second-to-last
+		else if ($forceTag=='scheduled') {
+			$tagParts = explode('.', $tag);
+			$lastPart = array_pop($tagParts);
+			$middlePart = array_pop($tagParts);
+			$middlePart = ((int)$middlePart)+1;
+			array_push($tagParts, $middlePart);
+			array_push($tagParts, '0');
+			$pickedTag = implode($tagParts, '.');
+		}
+		// Force tag
+		else if ($forceTag) {
+			$pickedTag = $forceTag;
+		}
+		// Update minor revision
+		else {
+			$tagParts = explode('.', $tag);
+			$lastPart = array_pop($tagParts);
+			$lastPart = ((int)$lastPart)+1;
+			array_push($tagParts, $lastPart);
+			$pickedTag = implode($tagParts, '.');
+		}
 		
 		// Create a changelog
-		
-		// Create the tag
-		
-		// Push back to the central server
+		$changes = $this->execer->execOrException("git log $tag..HEAD --pretty='[%an] %s' | grep -v 'Merge branch' | sort");
+		$files = $this->execer->execOrException("git diff HEAD $tag --name-only");
+	
+		if (isset($this->config['files']['changelog'])) {
+			$changelogFilename = $this->config['files']['changelog'];
+		}
+		else {
+			$changelogFilename = 'CHANGELOG.md';
+		}
+		touch($changelogFilename);
+		$this->execer->execOrException("mv $changelogFilename $changelogFilename.tmp");
+
+		$handle = fopen($changelogFilename, 'w+');
+		fwrite($handle, $pickedTag."\n------------------\n");
+		fwrite($handle, "$changes\n");
+		fwrite($handle, "Files altered since $tag:\n------------------\n");
+		fwrite($handle, "$files\n");
+		fclose($handle);
+
+		$this->execer->execOrException("cat $changelogFilename.tmp >> $changelogFilename");
+		$this->execer->execOrException("rm $changelogFilename.tmp");
+
+		// Create the tag locally (in case the release is reverted).
+		$this->execer->execOrException("git tag $pickedTag");
 		
 		// Print summary report, and deploy instruction
-		
-		throw new UserException("Not implemented yet");
+	}
+
+	function bundle($args) {
+		$forceTag = isset($args[0]) ? $args[0] : null;
+		list($tag, $ahead, $latest) = $this->git->latestTagOnBranch();
+
+		if ($forceTag) {
+			$pickedTag = $forceTag;
+		}
+		else {
+			$pickedTag = $tag;
+		}
+
+		if (isset($this->config['files']['bundle_prefix'])) {
+			$bundleFilename = $this->config['files']['bundle_prefix'];
+		}
+		else {
+			$bundleFilename = 'releases/release';
+		}
+
+		$this->execer->execOrException("mkdir -p ".dirname($bundleFilename));
+		$this->execer->execOrException("git archive $pickedTag | gzip > {$bundleFilename}-$pickedTag.tar.gz");
 	}
 
 	/**
@@ -214,6 +294,15 @@ class Git {
 		$this->dir = $dir;
 		$this->ssh = $ssh;
 		$this->execer = new Execer;
+	}
+
+	/**
+	 * Return the main tag name, without suffix after the dash.
+	 */
+	function latestTagOnBranch() {
+		$tag = trim($this->exec("git describe --tags --long | head -n 1"));
+		if($tag) return explode('-', $tag);
+		else return null;
 	}
 	
 	/**
