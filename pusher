@@ -4,6 +4,49 @@
 class Pusher {
 
 	//////////////////////////////////////////////////////////////////////////////////////////
+	// Helpers
+	
+	/**
+	 * Write a line into the local log
+	 */
+	function logLocally($message) {
+		if (!$message) return;
+
+		$localDate = trim(`date "+%Y-%m-%d %H:%M:%S"`, "\n");
+
+		if (isset($this->config['logging']['local_filename'])) {
+			$filename = $this->config['logging']['local_filename'];
+		}
+		else {
+			$filename = '.pusherlog';
+		}
+
+		$handle = fopen($filename, 'a+');
+		fwrite($handle, "[$localDate] $message\n");
+		fclose($handle);
+	}
+
+	/**
+	 * Write a line into the remote log
+	 */
+	function logRemotely($environment, $message) {
+		if(empty($this->config['environments'][$environment])) throw new UserException("Bad environment '$environment'");
+		
+		$dest = $this->config['environments'][$environment];
+		list($environmentSSH, $environmentDir) = explode(':', $dest, 2);
+
+		if (isset($this->config['logging']['remote_filename'])) {
+			$filename = $this->config['logging']['remote_filename'];
+		}
+		else {
+			$filename = '.pusherlog';
+		}
+
+		$deploylog = "[`date \"+%Y-%m-%d %H:%M:%S\"`] $message";
+		$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && echo '$deploylog' >> $filename\"");
+	}
+
+	//////////////////////////////////////////////////////////////////////////////////////////
 	// Core actions
 
 	function hotfix($args) {
@@ -54,18 +97,11 @@ class Pusher {
 		// Deploy the code by blindly switching to a version (no branch needed)
 		$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && git checkout $version\"");
 
-		// Log remotely
+		// Log
 		$hostname = trim(`hostname`, "\n");
 		$who = trim(`whoami`, "\n");
-		$localDate = trim(`date "+%Y-%m-%d %H:%M:%S"`, "\n");
-
-		$deploylog = "[`date \"+%Y-%m-%d %H:%M:%S\"`] Deployed $version from $who@$hostname";
-		$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && echo '$deploylog' >> .pusherlog\"");
-
-		// Log locally
-		$handle = fopen('.pusherlog', 'a+');
-		fwrite($handle, "[$localDate] Deployed $version to $environment\n");
-		fclose($handle);
+		$this->logRemotely($environment, "Deployed $version from $who@$hostname");
+		$this->logLocally("Deployed $version to $environment");
 		
 		// Run post-deploy script
 		if(!empty($this->config['handlers']['post-deploy'])) {
@@ -80,6 +116,7 @@ class Pusher {
 		$this->execer->execOrException("git branch $environment $version");
 		$this->execer->execOrException("git push origin +$environment:$environment");
 	}
+	
 	function rollback($args) {
 		throw new UserException("Not implemented yet");
 	}
