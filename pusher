@@ -54,6 +54,19 @@ class Pusher {
 		// Deploy the code by blindly switching to a version (no branch needed)
 		$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && git checkout $version\"");
 
+		// Log remotely
+		$hostname = trim(`hostname`, "\n");
+		$who = trim(`whoami`, "\n");
+		$localDate = trim(`date "+%Y-%m-%d %H:%M:%S"`, "\n");
+
+		$deploylog = "[`date \"+%Y-%m-%d %H:%M:%S\"`] Deployed $version from $who@$hostname";
+		$this->execer->execOrException("ssh $environmentSSH \"cd $environmentDir && echo '$deploylog' >> .pusherlog\"");
+
+		// Log locally
+		$handle = fopen('.pusherlog', 'a+');
+		fwrite($handle, "[$localDate] Deployed $version to $environment\n");
+		fclose($handle);
+		
 		// Run post-deploy script
 		if(!empty($this->config['handlers']['post-deploy'])) {
 			$postReceive = $this->config['handlers']['post-deploy'];
