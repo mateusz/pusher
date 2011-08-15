@@ -124,12 +124,20 @@ class Pusher {
 		// Create the tag locally (in case the release is reverted).
 		$this->execer->execOrException("git tag $pickedTag");
 		
-		// Print summary report, and deploy instruction
+		// Summary of the release
+		// Info on how to deploy vs bundle
 	}
 
 	function bundle($args) {
 		$forceTag = isset($args[0]) ? $args[0] : null;
 		list($tag, $ahead, $latest) = $this->git->latestTagOnBranch();
+
+		// Make sure tags are in sync. 
+		$this->execer->execOrException("git fetch");
+		$this->execer->execOrException("git fetch --tags");
+
+		// Push the tags now, we are assuming the release goes to the client at this stage.
+		$this->execer->execOrException("git push --tags");
 
 		if ($forceTag) {
 			$pickedTag = $forceTag;
